@@ -11,46 +11,7 @@ An enterprise-grade, stateful autonomous AI multi-agent orchestration platform e
 
 ---
 
-## 🏛️ System Architecture
 
-```mermaid
-graph TD
-    User([User / Cybernetic Dashboard]) -->|Submit Goal| API[FastAPI Gateway]
-    API -->|Persist State| DB[(MongoDB Atlas)]
-    API -->|Trigger Orchestration| Orchestrator[Orchestration Engine]
-    
-    Orchestrator -->|Decompose Plan| Planner[Planner Agent]
-    Planner -->|Task DAG & Criteria| Orchestrator
-    
-    Orchestrator -->|Route Task| Router[Model Router / ML Classifier]
-    Router -->|Data Sovereignty Guard| Guard{Sensitive Task?}
-    Guard -->|Yes: Block Cloud Egress| LocalFleet[On-Premise Ollama Fleet]
-    Guard -->|No: Optimal Route| Fleet[Hybrid Inference Fleet]
-    
-    subgraph Agent Workers
-        Researcher[Research Agent]
-        Developer[Developer Agent]
-        Analyst[Analyst Agent]
-        Writer[Document Producer Agent]
-    end
-    
-    Fleet --> Researcher
-    Fleet --> Developer
-    Fleet --> Analyst
-    Fleet --> Writer
-    LocalFleet --> Researcher
-    LocalFleet --> Developer
-    
-    Agent Workers -->|Context Query| VectorDB[(Atlas Vector Search / RAG)]
-    Agent Workers -->|Draft Outputs| Verifier[Reviewer & Verification Agent]
-    Verifier -->|Standard Artifact| Artifacts[Artifact Store]
-    Verifier -->|Consequential / Destructive Action| ApprovalQueue[Human Approval Queue]
-    ApprovalQueue -->|Approved / Rejected| Orchestrator
-    
-    Artifacts --> DB
-```
-
----
 
 ## 🚀 Key Features
 
@@ -119,11 +80,9 @@ Autonomous-AI-Multi-Agent-Orchestration-Platform/
 │   ├── models/                  # Serialized ML router models and label encoders
 │   ├── router_trainer.py        # ML training and evaluation script
 │   └── audit_router.py          # Leakage-resistant holdout audit script
-├── agent_prompts/               # System prompt contracts (Planner, Researcher, Developer, Reviewer)
 ├── docs/
 │   ├── ARCHITECTURE.md          # Architectural specification and flowcharts
-│   ├── DEPLOYMENT_GUIDE.md      # Production runbook, backup/recovery, and rollback plans
-│   └── ML_ROUTER_AUDIT.md       # Full statistical audit report of the ML router
+│   └── DEPLOYMENT_GUIDE.md      # Production runbook, backup/recovery, and rollback plans
 ├── Dockerfile                   # Multi-stage production container
 ├── docker-compose.yml           # Multi-service stack (Backend, Frontend, MongoDB)
 ├── requirements.txt             # Locked Python dependencies
@@ -239,7 +198,7 @@ Audited against 589 deduplicated real-world agent tasks with 5-fold cross-valida
 | **Performance Lift** | **+27.70%** |
 | **Cloud Cost Reduction** | **87.8% Savings** |
 
-For the complete statistical breakdown and confusion matrix, see [docs/ML_ROUTER_AUDIT.md](docs/ML_ROUTER_AUDIT.md).
+
 
 ---
 
@@ -253,6 +212,3 @@ For the complete statistical breakdown and confusion matrix, see [docs/ML_ROUTER
 
 ---
 
-## 📄 License
-
-This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
