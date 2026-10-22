@@ -1,0 +1,94 @@
+{
+  "status": "passed",
+  "sample_count": 589,
+  "test_set_size": 148,
+  "test_accuracy": 0.9932,
+  "test_macro_f1": 0.9913,
+  "mean_cv_accuracy": 0.9966,
+  "latency_ms": 827.0,
+  "stated_pricing_assumptions": {
+    "gemini_input_cost_per_1k_tokens": 0.0001,
+    "gemini_output_cost_per_1k_tokens": 0.0004,
+    "estimated_cost_per_cloud_task": 0.00015,
+    "local_ollama_marginal_token_cost": 0.0
+  },
+  "cost_efficiency_vs_all_cloud": "87.8% savings",
+  "local_execution_ratio": "87.8%",
+  "confusion_matrix": [
+    [
+      50,
+      0,
+      0,
+      0
+    ],
+    [
+      0,
+      65,
+      0,
+      0
+    ],
+    [
+      0,
+      0,
+      14,
+      0
+    ],
+    [
+      0,
+      1,
+      0,
+      18
+    ]
+  ],
+  "per_class_metrics": {
+    "Qwen 2.5": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1-score": 1.0,
+      "support": 50.0
+    },
+    "DeepSeek Coder": {
+      "precision": 0.9848484848484849,
+      "recall": 1.0,
+      "f1-score": 0.9923664122137404,
+      "support": 65.0
+    },
+    "Llama 3.2": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1-score": 1.0,
+      "support": 14.0
+    },
+    "Gemini 3.5": {
+      "precision": 1.0,
+      "recall": 0.9473684210526315,
+      "f1-score": 0.972972972972973,
+      "support": 19.0
+    },
+    "accuracy": 0.9932432432432432,
+    "macro avg": {
+      "precision": 0.9962121212121212,
+      "recall": 0.9868421052631579,
+      "f1-score": 0.9913348462966785,
+      "support": 148.0
+    },
+    "weighted avg": {
+      "precision": 0.9933456183456183,
+      "recall": 0.9932432432432432,
+      "f1-score": 0.9931777248674297,
+      "support": 148.0
+    }
+  },
+  "leakage": {
+    "train_unique_samples": 441,
+    "test_unique_samples": 148,
+    "exact_leakage_count": 0,
+    "leakage_rate": 0.0,
+    "passed": true
+  },
+  "evaluation_limitations": [
+    "Synthetic task distribution modeled from multi-agent archetypes",
+    "Performance dependent on Master Planner correctly estimating complexity and technical scope",
+    "Cold-start latency of local quantized weights is omitted from steady-state inference latency estimates"
+  ]
+}

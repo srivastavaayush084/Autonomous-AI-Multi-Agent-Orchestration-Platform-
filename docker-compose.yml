@@ -1,0 +1,47 @@
+version: '3.8'
+
+services:
+  # Autonomous Multi-Agent Core Service
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: multi_agent_orchestrator
+    ports:
+      - "8000:8000"
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8000
+      - ENVIRONMENT=production
+      - MONGODB_URI=${MONGODB_URI}
+      - MONGODB_DB_NAME=${MONGODB_DB_NAME:-multi_agent_platform}
+      - DEFAULT_MODEL_PROVIDER=ollama
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - ROUTER_STRATEGY=ml_hybrid
+      - REQUIRE_HUMAN_APPROVAL_FOR_DESTRUCTIVE=true
+    restart: unless-stopped
+    depends_on:
+      - ollama
+    networks:
+      - platform_network
+
+  # Optional Local Ollama Runtime for On-Premise Execution
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama_runtime
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_models:/root/.ollama
+    restart: unless-stopped
+    networks:
+      - platform_network
+
+volumes:
+  ollama_models:
+    driver: local
+
+networks:
+  platform_network:
+    driver: bridge

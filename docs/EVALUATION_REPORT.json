@@ -1,0 +1,92 @@
+{
+  "timestamp": "2026-10-22T19:08:48.063769",
+  "archetypes": {
+    "Research Workflow": {
+      "tasks_generated": 4,
+      "roles_assigned": [
+        "researcher",
+        "developer",
+        "developer",
+        "reviewer"
+      ],
+      "approval_gated": true,
+      "planning_latency_ms": 6012.29,
+      "status": "PASSED"
+    },
+    "Development Workflow": {
+      "tasks_generated": 4,
+      "roles_assigned": [
+        "researcher",
+        "developer",
+        "developer",
+        "reviewer"
+      ],
+      "approval_gated": true,
+      "planning_latency_ms": 5982.91,
+      "status": "PASSED"
+    },
+    "Data Analysis Workflow": {
+      "tasks_generated": 4,
+      "roles_assigned": [
+        "researcher",
+        "developer",
+        "developer",
+        "reviewer"
+      ],
+      "approval_gated": true,
+      "planning_latency_ms": 9446.54,
+      "status": "PASSED"
+    },
+    "Deployment Workflow": {
+      "tasks_generated": 4,
+      "roles_assigned": [
+        "researcher",
+        "developer",
+        "developer",
+        "reviewer"
+      ],
+      "approval_gated": true,
+      "planning_latency_ms": 10094.86,
+      "status": "PASSED"
+    },
+    "Checkpoint Recovery Workflow": {
+      "tasks_generated": 4,
+      "roles_assigned": [
+        "researcher",
+        "developer",
+        "developer",
+        "reviewer"
+      ],
+      "approval_gated": true,
+      "planning_latency_ms": 5958.83,
+      "status": "PASSED"
+    }
+  },
+  "concurrency": {
+    "concurrent_plans": 5,
+    "total_elapsed_sec": 4.48,
+    "throughput_plans_per_sec": 1.12,
+    "avg_latency_ms": 896.04,
+    "status": "PASSED"
+  },
+  "fault_recovery": {
+    "ingest_recovery": true,
+    "fallback_success": true,
+    "fallback_latency_ms": 11592.29,
+    "fallback_model_used": "resilient-synthesis-engine",
+    "status": "PASSED"
+  },
+  "security": {
+    "consequential_action_gated": true,
+    "gated_task_count": 2,
+    "direct_api_bypass_blocked": true,
+    "status": "PASSED"
+  },
+  "latency_costs": {
+    "gemini_endpoint_live": true,
+    "gemini_response_latency_ms": 27193.5,
+    "gemini_tokens_used": 28,
+    "estimated_cost_usd": 3e-06,
+    "status": "PASSED"
+  }
+}
