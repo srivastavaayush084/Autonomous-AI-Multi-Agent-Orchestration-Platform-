@@ -26,6 +26,7 @@ class OrchestrationService:
         self.mem_tasks: Dict[str, Dict[str, Any]] = {}
         self.mem_approvals: Dict[str, Dict[str, Any]] = {}
         self.mem_artifacts: Dict[str, Dict[str, Any]] = {}
+        self._active_loops: set = set()
 
     def _now(self) -> datetime:
         return datetime.now(timezone.utc)
@@ -260,42 +261,50 @@ class OrchestrationService:
         await self._execute_dag_loop(run_id)
 
     async def _execute_dag_loop(self, run_id: str):
-        while True:
-            run = await self.get_run(run_id)
-            if not run or run["status"] in [RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED]:
-                break
+        if run_id in self._active_loops:
+            logger.info(f"DAG loop for run {run_id} is already active.")
+            return
+        self._active_loops.add(run_id)
 
-            tasks = await self.get_run_tasks(run_id)
-            completed_ids = {t["task_id"] for t in tasks if t["status"] == TaskStatus.COMPLETED}
-            failed_tasks = [t for t in tasks if t["status"] == TaskStatus.FAILED]
-            
-            if failed_tasks:
-                run["status"] = RunStatus.FAILED
-                run["error_message"] = f"Task {failed_tasks[0]['task_id']} failed after maximum attempts."
-                run["completed_at"] = self._now()
-                await self._save_run(run)
-                break
+        try:
+            while True:
+                run = await self.get_run(run_id)
+                if not run or run["status"] in [RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED]:
+                    break
 
-            # Find tasks that are ready to run (dependencies completed and currently pending)
-            ready_tasks = [
-                t for t in tasks 
-                if t["status"] == TaskStatus.PENDING and all(dep in completed_ids for dep in t["depends_on"])
-            ]
-
-            if not ready_tasks:
-                # Check if all tasks completed
-                if len(completed_ids) == len(tasks) and len(tasks) > 0:
-                    run["status"] = RunStatus.COMPLETED
+                tasks = await self.get_run_tasks(run_id)
+                completed_ids = {t["task_id"] for t in tasks if t["status"] == TaskStatus.COMPLETED}
+                failed_tasks = [t for t in tasks if t["status"] == TaskStatus.FAILED]
+                
+                if failed_tasks:
+                    run["status"] = RunStatus.FAILED
+                    run["error_message"] = f"Task {failed_tasks[0]['task_id']} failed after maximum attempts."
                     run["completed_at"] = self._now()
-                    if run["started_at"]:
-                        run["execution_time_seconds"] = (run["completed_at"] - run["started_at"]).total_seconds()
-                    run["completed_tasks"] = len(completed_ids)
                     await self._save_run(run)
-                break
+                    break
 
-            # Execute ready tasks in parallel
-            await asyncio.gather(*[self._execute_single_task(t) for t in ready_tasks])
-            await asyncio.sleep(0.5)
+                # Find tasks that are ready to run (dependencies completed and currently pending or ready)
+                ready_tasks = [
+                    t for t in tasks 
+                    if t["status"] in [TaskStatus.PENDING, TaskStatus.READY] and all(dep in completed_ids for dep in t["depends_on"])
+                ]
+
+                if not ready_tasks:
+                    # Check if all tasks completed
+                    if len(completed_ids) == len(tasks) and len(tasks) > 0:
+                        run["status"] = RunStatus.COMPLETED
+                        run["completed_at"] = self._now()
+                        if run["started_at"]:
+                            run["execution_time_seconds"] = (run["completed_at"] - run["started_at"]).total_seconds()
+                        run["completed_tasks"] = len(completed_ids)
+                        await self._save_run(run)
+                    break
+
+                # Execute ready tasks in parallel
+                await asyncio.gather(*[self._execute_single_task(t) for t in ready_tasks])
+                await asyncio.sleep(0.5)
+        finally:
+            self._active_loops.discard(run_id)
 
     async def _execute_single_task(self, task: Dict[str, Any]):
         run_id = task["run_id"]

@@ -33,7 +33,20 @@ async def get_run_tasks(run_id: str):
     run = await orchestrator.get_run(run_id)
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")
-    return await orchestrator.get_run_tasks(run_id)
+    tasks = await orchestrator.get_run_tasks(run_id)
+    
+    # Self-healing: if run is running and has executable tasks, resume DAG loop if inactive
+    if run.get("status") == "running" and run_id not in orchestrator._active_loops:
+        completed_ids = {t["task_id"] for t in tasks if t.get("status") == "completed"}
+        has_executable = any(
+            t.get("status") in ["pending", "ready"] and all(dep in completed_ids for dep in t.get("depends_on", []))
+            for t in tasks
+        )
+        if has_executable:
+            import asyncio
+            asyncio.create_task(orchestrator._execute_dag_loop(run_id))
+
+    return tasks
 
 
 @router.post("/{run_id}/resume", response_model=RunResponse)

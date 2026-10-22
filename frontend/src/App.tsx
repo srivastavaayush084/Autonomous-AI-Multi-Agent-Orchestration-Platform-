@@ -7,7 +7,7 @@ import { NewRunModal } from './components/NewRunModal';
 import { ApprovalsDrawer } from './components/ApprovalsDrawer';
 import { ArtifactsModal } from './components/ArtifactsModal';
 import { ModelRegistryPanel } from './components/ModelRegistryPanel';
-import { Folder, Layers, Clock } from 'lucide-react';
+import { Folder, Layers, Clock, Play } from 'lucide-react';
 
 export const App: React.FC = () => {
   const [health, setHealth] = useState<{ status: string; database: string; strategy: string } | null>(null);
@@ -257,6 +257,24 @@ export const App: React.FC = () => {
               </div>
 
               <div style={{ display: 'flex', gap: '10px' }}>
+                {activeRun && activeRun.status !== 'completed' && activeRun.status !== 'failed' && (
+                  <button
+                    className="btn-primary"
+                    style={{ background: 'linear-gradient(135deg, #06b6d4, #6366f1)', border: 'none' }}
+                    onClick={async () => {
+                      await api.resumeRun(activeRun.run_id);
+                      const [fetchedTasks, fetchedRuns] = await Promise.all([
+                        api.getRunTasks(activeRun.run_id),
+                        api.getRuns(selectedProjectId || undefined)
+                      ]);
+                      setTasks(fetchedTasks);
+                      setRuns(fetchedRuns);
+                    }}
+                  >
+                    <Play size={16} />
+                    <span>Resume Execution</span>
+                  </button>
+                )}
                 <button className="btn-secondary" onClick={() => handleOpenArtifacts()}>
                   <Layers size={16} />
                   <span>View Deliverables ({artifacts.length})</span>

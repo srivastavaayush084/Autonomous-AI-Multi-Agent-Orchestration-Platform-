@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import type { Task } from '../types';
-import { CheckCircle2, Clock, AlertTriangle, ArrowRight, ShieldAlert, Cpu, Eye, CheckSquare } from 'lucide-react';
+import { CheckCircle2, Clock, AlertTriangle, ArrowRight, ShieldAlert, Cpu, Eye, CheckSquare, Play } from 'lucide-react';
+import { api } from '../services/api';
 
 interface TaskDAGViewerProps {
   tasks: Task[];
@@ -149,6 +150,28 @@ export const TaskDAGViewer: React.FC<TaskDAGViewerProps> = ({ tasks, onViewArtif
                     {getStatusIcon(task.status)}
                     <span>{task.status.replace('_', ' ')}</span>
                   </div>
+
+                  {task.status === 'ready' && (
+                    <button
+                      className="btn-primary"
+                      style={{
+                        padding: '5px 10px',
+                        fontSize: '0.75rem',
+                        background: 'linear-gradient(135deg, #10b981, #059669)',
+                        border: 'none',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '4px'
+                      }}
+                      onClick={async (e) => {
+                        e.stopPropagation();
+                        await api.resumeRun(task.run_id);
+                      }}
+                    >
+                      <Play size={12} />
+                      <span>Execute</span>
+                    </button>
+                  )}
 
                   <button
                     className="btn-secondary"
