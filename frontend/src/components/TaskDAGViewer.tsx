@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import type { Task } from '../types';
-import { CheckCircle2, Clock, AlertTriangle, ArrowRight, ShieldAlert, Cpu, Eye, CheckSquare, Play } from 'lucide-react';
+import { CheckCircle2, Clock, AlertTriangle, ArrowRight, ShieldAlert, Cpu, Eye, CheckSquare, Play, Copy, Check } from 'lucide-react';
 import { api } from '../services/api';
 
 interface TaskDAGViewerProps {
@@ -10,6 +10,7 @@ interface TaskDAGViewerProps {
 
 export const TaskDAGViewer: React.FC<TaskDAGViewerProps> = ({ tasks, onViewArtifacts }) => {
   const [expandedTask, setExpandedTask] = useState<string | null>(null);
+  const [copiedTaskId, setCopiedTaskId] = useState<string | null>(null);
 
   if (tasks.length === 0) {
     return (
@@ -253,14 +254,29 @@ export const TaskDAGViewer: React.FC<TaskDAGViewerProps> = ({ tasks, onViewArtif
                         <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)' }}>
                           AGENT DELIVERABLE PAYLOAD:
                         </span>
-                        <button
-                          className="btn-secondary"
-                          style={{ padding: '4px 10px', fontSize: '0.72rem' }}
-                          onClick={() => onViewArtifacts(task.task_id)}
-                        >
-                          <Eye size={12} />
-                          <span>View Full Artifact</span>
-                        </button>
+                        <div style={{ display: 'flex', gap: '6px' }}>
+                          <button
+                            className="btn-secondary"
+                            style={{ padding: '4px 10px', fontSize: '0.72rem', display: 'flex', alignItems: 'center', gap: '4px' }}
+                            onClick={() => {
+                              const str = JSON.stringify(task.output_data, null, 2);
+                              navigator.clipboard.writeText(str);
+                              setCopiedTaskId(task.task_id);
+                              setTimeout(() => setCopiedTaskId(null), 2000);
+                            }}
+                          >
+                            {copiedTaskId === task.task_id ? <Check size={12} color="#10b981" /> : <Copy size={12} />}
+                            <span>{copiedTaskId === task.task_id ? 'Copied!' : 'Copy'}</span>
+                          </button>
+                          <button
+                            className="btn-secondary"
+                            style={{ padding: '4px 10px', fontSize: '0.72rem' }}
+                            onClick={() => onViewArtifacts(task.task_id)}
+                          >
+                            <Eye size={12} />
+                            <span>View Full Artifact</span>
+                          </button>
+                        </div>
                       </div>
                       <pre className="font-mono" style={{
                         background: '#040711',
