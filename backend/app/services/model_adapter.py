@@ -110,7 +110,15 @@ class ModelAdapter:
             logger.debug(f"Could not query Ollama tags: {e}")
         return clean_model
 
-    async def generate(self, model_id: str, system_prompt: str, user_prompt: str, temperature: float = 0.2) -> str:
+    async def generate(
+        self,
+        model_id: str,
+        system_prompt: str,
+        user_prompt: str,
+        temperature: float = 0.2,
+        max_tokens: Optional[int] = None,
+        timeout: Optional[float] = None,
+    ) -> str:
         """
         Executes generation with automatic fallback:
         1. Targeted model (Ollama or Cloud) with dynamic model resolution
@@ -167,13 +175,18 @@ class ModelAdapter:
         # Attempt 3: Local Ollama (targeted, or as fallback from failed cloud/offline model)
         try:
             target_model = await self._resolve_ollama_model(clean_model)
-            async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=5.0)) as client:
+            timeout_sec = timeout or float(settings.EXECUTION_BUDGET_SECONDS)  # default 300.0s
+            options: Dict[str, Any] = {"temperature": temperature}
+            if max_tokens:
+                options["num_predict"] = max_tokens
+
+            async with httpx.AsyncClient(timeout=httpx.Timeout(timeout_sec, connect=5.0)) as client:
                 payload = {
                     "model": target_model,
                     "prompt": user_prompt,
                     "system": system_prompt,
                     "stream": False,
-                    "options": {"temperature": temperature}
+                    "options": options
                 }
                 res = await client.post(f"{self.ollama_url}/api/generate", json=payload)
                 if res.status_code == 200:

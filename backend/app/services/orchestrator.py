@@ -603,7 +603,7 @@ class OrchestrationService:
 
         try:
             target_model = f"ollama/{settings.OLLAMA_DEFAULT_MODEL}"
-            answer = await model_adapter.generate(target_model, system, goal, temperature=0.3)
+            answer = await model_adapter.generate(target_model, system, goal, temperature=0.3, max_tokens=700, timeout=120.0)
             
             # Content-aware validation
             is_valid, validation_msg = self._validate_qa_content(answer, goal)
@@ -711,6 +711,7 @@ class OrchestrationService:
                 sys_prompt = self._role_system_prompt(t["role"])
 
                 if t["task_id"] == "T1-research":
+                    step_max_tokens = 600
                     user_prompt = (
                         f"Research topic: {goal}\n\n"
                         f"Provide detailed technical analysis covering:\n"
@@ -722,8 +723,9 @@ class OrchestrationService:
                         f"Write substantive technical paragraphs. Do NOT generate generic placeholder text."
                     )
                 elif t["task_id"] == "T2-write":
+                    step_max_tokens = 900
                     user_prompt = (
-                        f"Using the following research findings:\n\n{research_content}\n\n"
+                        f"Using the following research findings:\n\n{research_content[:1200]}\n\n"
                         f"Write a complete academic research paper on: {goal}.\n\n"
                         f"The paper must include the following sections with full paragraphs:\n"
                         f"# Title: {goal}\n\n"
@@ -748,13 +750,16 @@ class OrchestrationService:
                         f"Write substantive, cohesive paragraphs for every section. Do NOT use generic filler phrases."
                     )
                 else:  # T3-qa
+                    step_max_tokens = 400
                     user_prompt = (
-                        f"Review this research paper for technical rigor and completeness:\n\n{final_paper[:3000]}\n\n"
+                        f"Review this research paper for technical rigor and completeness:\n\n{final_paper[:2000]}\n\n"
                         f"Confirm all required sections (Abstract, Intro, Method, Limitations, References) are present and evaluate paper quality."
                     )
 
                 target_model = f"ollama/{settings.OLLAMA_DEFAULT_MODEL}"
-                response = await model_adapter.generate(target_model, sys_prompt, user_prompt, temperature=0.3)
+                response = await model_adapter.generate(
+                    target_model, sys_prompt, user_prompt, temperature=0.3, max_tokens=step_max_tokens, timeout=300.0
+                )
 
                 if (
                     not response
@@ -939,7 +944,9 @@ class OrchestrationService:
 
                 user_prompt = f"{context}{t['goal']}"
                 target_model = f"ollama/{settings.OLLAMA_DEFAULT_MODEL}"
-                response = await model_adapter.generate(target_model, sys_prompt, user_prompt, temperature=0.2)
+                response = await model_adapter.generate(
+                    target_model, sys_prompt, user_prompt, temperature=0.2, max_tokens=1000, timeout=240.0
+                )
 
                 if (
                     not response

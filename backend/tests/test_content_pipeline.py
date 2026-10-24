@@ -149,7 +149,7 @@ async def test_research_workflow_substantive_paper_docx_pdf():
         "Empirical methodology on CIC-IDS2017 is rigorous."
     )
 
-    async def side_effect(model_id, system_prompt, user_prompt, temperature=0.3):
+    async def side_effect(model_id, system_prompt, user_prompt, *args, **kwargs):
         if "Research topic" in user_prompt or "threat models" in user_prompt.lower():
             return mock_research
         elif "research findings" in user_prompt.lower() or "academic research paper" in user_prompt.lower():
@@ -199,7 +199,7 @@ async def test_website_generation_produces_real_react_code_and_valid_zip():
     mock_css = ':root { --primary: #06b6d4; --bg: #0f172a; }\nbody { background: var(--bg); color: #fff; font-family: sans-serif; }\n.portfolio { max-width: 1200px; margin: 0 auto; padding: 2rem; }'
     mock_readme = '# React Portfolio Website\n\n## Getting Started\n```bash\nnpm install\nnpm run dev\n```'
 
-    async def side_effect(model_id, sys_prompt, user_prompt, temperature=0.2):
+    async def side_effect(model_id, sys_prompt, user_prompt, *args, **kwargs):
         if "package.json" in user_prompt:
             return f"```json\n{mock_pkg}\n```"
         elif "index.html" in user_prompt:
@@ -268,7 +268,7 @@ async def test_research_inference_failure_halts_immediately_and_blocks_error_rev
 
     called_prompts = []
 
-    async def side_effect(model_id, sys_prompt, user_prompt, temperature=0.3):
+    async def side_effect(model_id, sys_prompt, user_prompt, *args, **kwargs):
         called_prompts.append(user_prompt)
         # T1 succeeds, but T2-write fails
         if "Research topic" in user_prompt:
