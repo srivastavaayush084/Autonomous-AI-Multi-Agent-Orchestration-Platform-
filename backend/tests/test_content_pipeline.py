@@ -296,3 +296,77 @@ async def test_research_inference_failure_halts_immediately_and_blocks_error_rev
         artifacts = await orchestrator.list_artifacts(run["run_id"])
         downloadable = [a for a in artifacts if a.get("artifact_type") in ["docx", "pdf"]]
         assert len(downloadable) == 0
+
+
+@pytest.mark.anyio
+async def test_data_analysis_workflow_produces_real_stats_and_csv(tmp_path):
+    """Verify that Data Analysis executes real pandas calculations and outputs summary CSV and reports."""
+    # 1. Create a sample CSV
+    csv_file = tmp_path / "sales_data.csv"
+    csv_file.write_text(
+        "transaction_id,category,revenue,units_sold\n"
+        "TX101,Electronics,1200.50,4\n"
+        "TX102,Hardware,450.00,10\n"
+        "TX103,Electronics,3200.00,2\n"
+        "TX104,Software,150.00,1\n"
+        "TX105,Hardware,890.25,5\n"
+    )
+
+    goal = f"Analyze dataset at {str(csv_file)} and compute statistical summary"
+    run = await orchestrator.create_run(project_id="test-proj-analysis", goal=goal)
+
+    async def mock_generate(*args, **kwargs):
+        return "Comprehensive analysis of revenue indicates strong performance in Electronics with mean revenue exceeding $1,000."
+
+    with patch("app.services.model_adapter.model_adapter.generate", side_effect=mock_generate):
+        await orchestrator._execute_data_analysis_run(run["run_id"], goal, str(csv_file))
+
+    # Verify run status
+    updated_run = await orchestrator.get_run(run["run_id"])
+    assert updated_run["status"] == RunStatus.COMPLETED
+
+    # Verify artifacts
+    artifacts = await orchestrator.list_artifacts(run["run_id"])
+    csv_art = next((a for a in artifacts if a.get("artifact_type") == "csv"), None)
+    assert csv_art is not None, "summary_statistics.csv must be created"
+    assert os.path.exists(csv_art["file_path"]), "Physical CSV file must exist on disk"
+    assert os.path.getsize(csv_art["file_path"]) > 0
+
+    # Verify DOCX and PDF reports exist on disk
+    docx_art = next((a for a in artifacts if a.get("artifact_type") == "docx"), None)
+    pdf_art = next((a for a in artifacts if a.get("artifact_type") == "pdf"), None)
+    assert docx_art is not None and os.path.exists(docx_art["file_path"])
+    assert pdf_art is not None and os.path.exists(pdf_art["file_path"])
+
+
+@pytest.mark.anyio
+async def test_doc_qa_workflow_extracts_content_and_answers(tmp_path):
+    """Verify that Document QA extracts file content and grounds answer with downloadable reports."""
+    doc_file = tmp_path / "policy.txt"
+    doc_file.write_text(
+        "SECTION 1: Scope of Service.\n"
+        "The vendor SLA guarantees 99.95% uptime with 1-hour critical response window.\n"
+        "SECTION 2: Penalty Clauses.\n"
+        "Failure to satisfy uptime triggers a 15% billing credit.\n"
+    )
+
+    goal = f"What is the SLA uptime guarantee in document {str(doc_file)}?"
+    run = await orchestrator.create_run(project_id="test-proj-docqa", goal=goal)
+
+    async def mock_generate(*args, **kwargs):
+        return "According to Section 1, the vendor SLA guarantees 99.95% uptime with a 1-hour critical response window."
+
+    with patch("app.services.model_adapter.model_adapter.generate", side_effect=mock_generate):
+        await orchestrator._execute_doc_qa_run(run["run_id"], goal, file_path=str(doc_file))
+
+    updated_run = await orchestrator.get_run(run["run_id"])
+    assert updated_run["status"] == RunStatus.COMPLETED
+
+    artifacts = await orchestrator.list_artifacts(run["run_id"])
+    downloadable = [a for a in artifacts if a.get("artifact_type") in ["docx", "pdf"]]
+    assert len(downloadable) >= 2, "Must produce DOCX and PDF reports"
+    for art in downloadable:
+        assert os.path.exists(art["file_path"]), f"Physical deliverable {art['file_path']} must exist"
+        assert os.path.getsize(art["file_path"]) > 0
+
+

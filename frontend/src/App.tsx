@@ -1,11 +1,21 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import type { Project, Run, Task, ApprovalRequest, Artifact } from './types';
+import type { Project, Run, Task, ApprovalRequest, Artifact, ModelInfo } from './types';
 import { api } from './services/api';
 import {
-  Send, Plus, Layers, CheckCircle, XCircle, Clock, Bot,
+  Send, Plus, CheckCircle, Bot,
   User, Copy, Check, Download, FileText, Code2, Zap,
-  AlertTriangle, RotateCcw, ChevronRight
+  AlertTriangle, MessageSquare,
+  BarChart3, FileSearch, GitBranch, Settings, X
 } from 'lucide-react';
+
+import { ResearchWorkspace } from './components/workspaces/ResearchWorkspace';
+import { SoftwareWorkspace } from './components/workspaces/SoftwareWorkspace';
+import { DataAnalysisWorkspace } from './components/workspaces/DataAnalysisWorkspace';
+import { DocumentQAWorkspace } from './components/workspaces/DocumentQAWorkspace';
+import { FilesDownloadsWorkspace } from './components/workspaces/FilesDownloadsWorkspace';
+import { TimelineDAGWorkspace } from './components/workspaces/TimelineDAGWorkspace';
+import { SettingsWorkspace } from './components/workspaces/SettingsWorkspace';
+import { ArtifactsModal } from './components/ArtifactsModal';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -31,6 +41,8 @@ interface ChatMessage {
   isComplete?: boolean;
   isTyping?: boolean;
 }
+
+type WorkspaceView = 'chat' | 'research' | 'software' | 'data' | 'document' | 'files' | 'timeline' | 'settings';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -117,7 +129,7 @@ const OutputCard: React.FC<OutputCardProps> = ({ artifacts }) => {
 
   if (!artifacts.length) return null;
 
-  const current = artifacts[activeTab];
+  const current = artifacts[activeTab] || artifacts[0];
   const content = (current as any).full_content || current.content_snippet || '';
   const contentType = detectContentType(content);
   const displayContent = contentType === 'code' ? stripCodeFences(content) : content;
@@ -142,13 +154,13 @@ const OutputCard: React.FC<OutputCardProps> = ({ artifacts }) => {
   const pdfArtifact = artifacts.find(a => a.artifact_type === 'pdf' || a.title.toLowerCase().endsWith('.pdf'));
   const docxArtifact = artifacts.find(a => a.artifact_type === 'docx' || a.title.toLowerCase().endsWith('.docx'));
   const zipArtifact = artifacts.find(a => a.artifact_type === 'zip' || a.title.toLowerCase().includes('zip'));
+  const csvArtifact = artifacts.find(a => a.artifact_type === 'csv' || a.title.toLowerCase().endsWith('.csv'));
 
   const downloadPDF = () => {
     if (pdfArtifact) {
       window.location.href = `/api/v1/artifacts/${pdfArtifact.artifact_id}/download`;
       return;
     }
-    // Fallback print-to-PDF via new window
     const win = window.open('', '_blank');
     if (!win) return;
     win.document.write(`<!DOCTYPE html>
@@ -195,6 +207,12 @@ const OutputCard: React.FC<OutputCardProps> = ({ artifacts }) => {
     URL.revokeObjectURL(url);
   };
 
+  const downloadCSV = () => {
+    if (csvArtifact) {
+      window.location.href = `/api/v1/artifacts/${csvArtifact.artifact_id}/download`;
+    }
+  };
+
   return (
     <div className="output-card fade-in">
       <div className="output-card-header">
@@ -221,19 +239,14 @@ const OutputCard: React.FC<OutputCardProps> = ({ artifacts }) => {
           <button className="btn-download btn-download-pdf" onClick={downloadPDF}>
             <FileText size={12} /> PDF
           </button>
+          {csvArtifact && (
+            <button className="btn-download btn-download-txt" onClick={downloadCSV}>
+              <Download size={12} /> CSV
+            </button>
+          )}
           {zipArtifact && (
             <button className="btn-download btn-download-zip" onClick={downloadZip}>
               <Download size={12} /> ZIP
-            </button>
-          )}
-          {contentType === 'code' && !zipArtifact && (
-            <button className="btn-download btn-download-zip" onClick={() => downloadAs('py', 'text/plain')}>
-              <Code2 size={12} /> .PY
-            </button>
-          )}
-          {artifacts.length > 1 && !zipArtifact && (
-            <button className="btn-download btn-download-zip" onClick={downloadZip}>
-              <Download size={12} /> ALL
             </button>
           )}
         </div>
@@ -294,7 +307,6 @@ const MessageBubble: React.FC<{
     );
   }
 
-  // Agent message
   return (
     <div className="message-row fade-in">
       <div className="msg-avatar agent"><Bot size={16} style={{ color: '#06b6d4' }} /></div>
@@ -311,7 +323,6 @@ const MessageBubble: React.FC<{
                 {msg.content}
               </div>
 
-              {/* Pending approval banners */}
               {msg.approvals?.filter(a => a.status === 'pending').map(approval => (
                 <div key={approval.approval_id} className="approval-banner" style={{ marginTop: 12 }}>
                   <div className="approval-info">
@@ -329,12 +340,10 @@ const MessageBubble: React.FC<{
                 </div>
               ))}
 
-              {/* Task pipeline */}
               {msg.tasks && msg.tasks.length > 0 && (
                 <AgentProgress tasks={msg.tasks} />
               )}
 
-              {/* Final deliverables */}
               {msg.isComplete && msg.artifacts && msg.artifacts.length > 0 && (
                 <OutputCard artifacts={msg.artifacts} />
               )}
@@ -353,54 +362,76 @@ const MessageBubble: React.FC<{
 // ─── Main App ─────────────────────────────────────────────────────────────────
 
 export const App: React.FC = () => {
+  const [activeTab, setActiveTab] = useState<WorkspaceView>('chat');
   const [defaultProject, setDefaultProject] = useState<Project | null>(null);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
+  const [allRuns, setAllRuns] = useState<Run[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [activeRun, setActiveRun] = useState<Run | null>(null);
+  const [activeTasks, setActiveTasks] = useState<Task[]>([]);
+  const [activeArtifacts, setActiveArtifacts] = useState<Artifact[]>([]);
+  const [models, setModels] = useState<ModelInfo[]>([]);
+  
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputText, setInputText] = useState('');
   const [isSending, setIsSending] = useState(false);
+  const [artifactsModalOpen, setArtifactsModalOpen] = useState(false);
+  const [filterTaskId, setFilterTaskId] = useState<string | null>(null);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Auto-scroll to bottom
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
   useEffect(() => {
-    scrollToBottom();
-  }, [messages]);
+    if (activeTab === 'chat') {
+      scrollToBottom();
+    }
+  }, [messages, activeTab]);
 
-  // Bootstrap: ensure a default project exists
-  useEffect(() => {
-    const init = async () => {
-      try {
-        const projects = await api.getProjects();
-        let proj = projects.find(p => p.name === 'Default Workspace') || projects[0];
-        if (!proj) {
-          proj = await api.createProject('Default Workspace', 'Auto-created default workspace');
-        }
-        setDefaultProject(proj);
+  // Bootstrap
+  const loadWorkspaceData = async () => {
+    try {
+      const [projects, fetchedModels] = await Promise.all([
+        api.getProjects(),
+        api.getModels(),
+      ]);
+      setModels(fetchedModels);
 
-        // Load existing runs as sessions
-        const runs = await api.getRuns(proj.project_id);
-        const loadedSessions: ChatSession[] = runs.map(r => ({
-          id: r.run_id,
-          projectId: r.project_id,
-          title: r.goal.slice(0, 60) + (r.goal.length > 60 ? '…' : ''),
-          status: r.status,
-          createdAt: r.created_at,
-        }));
-        setSessions(loadedSessions);
-      } catch (err) {
-        console.error('Init error:', err);
+      let proj = projects.find(p => p.name === 'Default Workspace') || projects[0];
+      if (!proj) {
+        proj = await api.createProject('Default Workspace', 'Auto-created default workspace');
       }
-    };
-    init();
+      setDefaultProject(proj);
+
+      const runs = await api.getRuns(proj.project_id);
+      setAllRuns(runs);
+
+      const loadedSessions: ChatSession[] = runs.map(r => ({
+        id: r.run_id,
+        projectId: r.project_id,
+        title: r.goal.slice(0, 60) + (r.goal.length > 60 ? '…' : ''),
+        status: r.status,
+        createdAt: r.created_at,
+      }));
+      setSessions(loadedSessions);
+
+      if (runs.length > 0 && !activeSessionId) {
+        setActiveRun(runs[0]);
+      }
+    } catch (err) {
+      console.error('Bootstrap error:', err);
+    }
+  };
+
+  useEffect(() => {
+    loadWorkspaceData();
   }, []);
 
-  // Poll the active session for live updates
+  // Polling loop
   const startPolling = useCallback((runId: string) => {
     if (pollingRef.current) clearInterval(pollingRef.current);
 
@@ -413,7 +444,11 @@ export const App: React.FC = () => {
           api.getApprovals(runId),
         ]);
 
-        const isTerminal = run.status === 'completed' || run.status === 'failed';
+        setActiveRun(run);
+        setActiveTasks(tasks);
+        setActiveArtifacts(artifacts);
+
+        const isTerminal = run.status === 'completed' || run.status === 'failed' || run.status === 'cancelled';
 
         setMessages(prev => {
           const idx = prev.findIndex(m => m.runId === runId && m.type === 'agent');
@@ -430,8 +465,10 @@ export const App: React.FC = () => {
             msg.artifacts = artifacts;
             if (run.status === 'completed') {
               msg.content = `✅ Task completed successfully in ${run.execution_time_seconds?.toFixed(1) ?? '?'}s. Here are your deliverables:`;
+            } else if (run.status === 'cancelled') {
+              msg.content = `🛑 Task was cancelled by the user.`;
             } else {
-              msg.content = `❌ Something went wrong: ${run.error_message || 'Unknown error'}. You can try again.`;
+              msg.content = `❌ Something went wrong: ${run.error_message || 'Execution error'}.`;
             }
             msg.isTyping = false;
           } else {
@@ -450,8 +487,8 @@ export const App: React.FC = () => {
           return updated;
         });
 
-        // Update session status
         setSessions(prev => prev.map(s => s.id === runId ? { ...s, status: run.status } : s));
+        setAllRuns(prev => prev.map(r => r.run_id === runId ? run : r));
 
         if (isTerminal && pollingRef.current) {
           clearInterval(pollingRef.current);
@@ -459,16 +496,14 @@ export const App: React.FC = () => {
           setIsSending(false);
         }
       } catch {
-        // silently ignore transient errors
+        // ignore transient errors
       }
     }, 2000);
   }, []);
 
-  const handleSend = async (text?: string) => {
-    const goal = (text ?? inputText).trim();
-    if (!goal || isSending || !defaultProject) return;
+  const handleLaunchTask = async (goal: string) => {
+    if (!goal.trim() || isSending || !defaultProject) return;
 
-    setInputText('');
     setIsSending(true);
 
     const userMsg: ChatMessage = {
@@ -495,7 +530,10 @@ export const App: React.FC = () => {
     try {
       const run = await api.createRun(defaultProject.project_id, goal);
 
-      // Attach runId to the agent message
+      setActiveRun(run);
+      setActiveTasks([]);
+      setActiveArtifacts([]);
+
       setMessages(prev =>
         prev.map(m => m.id === agentMsg.id
           ? { ...m, runId: run.run_id, isTyping: false, content: '🔄 Planning your request…' }
@@ -503,7 +541,6 @@ export const App: React.FC = () => {
         )
       );
 
-      // Add to sessions list
       const newSession: ChatSession = {
         id: run.run_id,
         projectId: run.project_id,
@@ -512,6 +549,7 @@ export const App: React.FC = () => {
         createdAt: run.created_at,
       };
       setSessions(prev => [newSession, ...prev]);
+      setAllRuns(prev => [run, ...prev]);
       setActiveSessionId(run.run_id);
 
       startPolling(run.run_id);
@@ -526,9 +564,23 @@ export const App: React.FC = () => {
     }
   };
 
+  const handleCancelRun = async (runId: string) => {
+    try {
+      const updated = await api.cancelRun(runId);
+      setActiveRun(updated);
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current);
+        pollingRef.current = null;
+      }
+      setIsSending(false);
+      setSessions(prev => prev.map(s => s.id === runId ? { ...s, status: 'cancelled' } : s));
+    } catch (err) {
+      console.error('Cancel run error:', err);
+    }
+  };
+
   const handleApprove = async (approvalId: string) => {
     await api.decideApproval(approvalId, 'approved', 'Approved by user');
-    // Resume polling will handle the rest
   };
 
   const handleReject = async (approvalId: string) => {
@@ -547,13 +599,19 @@ export const App: React.FC = () => {
         api.getApprovals(session.id),
       ]);
 
-      const isTerminal = run.status === 'completed' || run.status === 'failed';
+      setActiveRun(run);
+      setActiveTasks(tasks);
+      setActiveArtifacts(artifacts);
+
+      const isTerminal = run.status === 'completed' || run.status === 'failed' || run.status === 'cancelled';
 
       let agentContent = '';
       if (run.status === 'completed') {
         agentContent = `✅ Completed in ${run.execution_time_seconds?.toFixed(1) ?? '?'}s. Here are your deliverables:`;
       } else if (run.status === 'failed') {
         agentContent = `❌ Failed: ${run.error_message || 'Unknown error'}`;
+      } else if (run.status === 'cancelled') {
+        agentContent = `🛑 Task was cancelled by user.`;
       } else {
         agentContent = '🔄 Still working…';
       }
@@ -593,15 +651,23 @@ export const App: React.FC = () => {
   const handleNewChat = () => {
     if (pollingRef.current) clearInterval(pollingRef.current);
     setActiveSessionId(null);
+    setActiveRun(null);
+    setActiveTasks([]);
+    setActiveArtifacts([]);
     setMessages([]);
     setIsSending(false);
+    setActiveTab('chat');
     inputRef.current?.focus();
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      handleSend();
+      if (inputText.trim()) {
+        const text = inputText;
+        setInputText('');
+        handleLaunchTask(text);
+      }
     }
   };
 
@@ -609,6 +675,7 @@ export const App: React.FC = () => {
     const colors: Record<string, string> = {
       completed: '#34d399',
       failed: '#fb7185',
+      cancelled: '#94a3b8',
       running: '#38bdf8',
       planning: '#c084fc',
       waiting_approval: '#fbbf24',
@@ -628,7 +695,7 @@ export const App: React.FC = () => {
 
   return (
     <div className="app-shell">
-      {/* ─── Sidebar ─────────────────────────────────────────── */}
+      {/* ─── Sidebar: Project & Task History ──────────────────── */}
       <aside className="sidebar">
         <div className="sidebar-header">
           <div className="sidebar-logo">
@@ -640,12 +707,12 @@ export const App: React.FC = () => {
           </button>
         </div>
 
-        <div className="sidebar-section-title">Recent Tasks</div>
+        <div className="sidebar-section-title">Project & Task History</div>
 
         <div className="sidebar-list">
           {sessions.length === 0 && (
             <div style={{ padding: '12px 12px', fontSize: '0.78rem', color: 'var(--text-muted)', lineHeight: 1.6 }}>
-              No tasks yet. Type something to get started.
+              No tasks yet. Select a workspace to get started.
             </div>
           )}
           {sessions.map(session => (
@@ -675,101 +742,273 @@ export const App: React.FC = () => {
         <div className="sidebar-footer">
           <div className="status-pill">
             <div className="status-dot" />
-            Backend connected
+            Local Engine Active (llama3.2:1b)
           </div>
         </div>
       </aside>
 
-      {/* ─── Main Chat ───────────────────────────────────────── */}
-      <main className="chat-main">
-        {/* Topbar */}
-        <div className="chat-topbar">
-          <div className="chat-topbar-title">
-            {activeSessionId
-              ? sessions.find(s => s.id === activeSessionId)?.title ?? 'Task'
-              : 'Autonomous AI Multi-Agent Platform'}
-          </div>
-          <div className="chat-topbar-actions">
-            {activeSessionId && (
-              <span className={`badge badge-${sessions.find(s => s.id === activeSessionId)?.status ?? 'pending'}`}>
-                {sessions.find(s => s.id === activeSessionId)?.status ?? 'pending'}
-              </span>
-            )}
-            <button
-              style={{
-                display: 'flex', alignItems: 'center', gap: 6,
-                padding: '6px 12px', borderRadius: 7,
-                background: 'rgba(255,255,255,0.05)',
-                border: '1px solid var(--border-subtle)',
-                color: 'var(--text-secondary)',
-                fontSize: '0.78rem', fontWeight: 500, cursor: 'pointer',
-                fontFamily: 'var(--font-sans)'
-              }}
-              onClick={handleNewChat}
-            >
-              <Plus size={13} /> New
-            </button>
-          </div>
-        </div>
+      {/* ─── Main Content Shell ──────────────────────────────── */}
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
+        {/* Workspace Navigation Bar */}
+        <header className="workspace-nav-bar">
+          <button
+            className={`workspace-nav-btn ${activeTab === 'chat' ? 'active' : ''}`}
+            onClick={() => setActiveTab('chat')}
+          >
+            <MessageSquare size={14} /> AI Chat
+          </button>
+          <button
+            className={`workspace-nav-btn ${activeTab === 'research' ? 'active' : ''}`}
+            onClick={() => setActiveTab('research')}
+          >
+            <FileText size={14} /> Research & Reports
+          </button>
+          <button
+            className={`workspace-nav-btn ${activeTab === 'software' ? 'active' : ''}`}
+            onClick={() => setActiveTab('software')}
+          >
+            <Code2 size={14} /> Software Builder
+          </button>
+          <button
+            className={`workspace-nav-btn ${activeTab === 'data' ? 'active' : ''}`}
+            onClick={() => setActiveTab('data')}
+          >
+            <BarChart3 size={14} /> Data Analysis
+          </button>
+          <button
+            className={`workspace-nav-btn ${activeTab === 'document' ? 'active' : ''}`}
+            onClick={() => setActiveTab('document')}
+          >
+            <FileSearch size={14} /> Document QA
+          </button>
+          <button
+            className={`workspace-nav-btn ${activeTab === 'files' ? 'active' : ''}`}
+            onClick={() => setActiveTab('files')}
+          >
+            <Download size={14} /> Files & Downloads
+          </button>
+          <button
+            className={`workspace-nav-btn ${activeTab === 'timeline' ? 'active' : ''}`}
+            onClick={() => setActiveTab('timeline')}
+          >
+            <GitBranch size={14} /> Execution DAG
+          </button>
+          <button
+            className={`workspace-nav-btn ${activeTab === 'settings' ? 'active' : ''}`}
+            onClick={() => setActiveTab('settings')}
+          >
+            <Settings size={14} /> Settings & Models
+          </button>
+        </header>
 
-        {/* Messages */}
-        <div className="messages-area">
-          {showWelcome ? (
-            <div className="welcome-screen">
-              <div className="welcome-logo">🤖</div>
-              <h1 className="welcome-title">What can I help you build?</h1>
-              <p className="welcome-subtitle">
-                Describe any task — research papers, websites, scripts, analysis reports — and a team of AI agents will complete it and deliver the full output.
-              </p>
-              <div className="suggestion-grid">
-                {SUGGESTIONS.map((s, i) => (
-                  <div key={i} className="suggestion-card" onClick={() => handleSend(s.prompt)}>
-                    <div className="suggestion-emoji">{s.emoji}</div>
-                    <div className="suggestion-title">{s.title}</div>
-                    <div className="suggestion-desc">{s.desc}</div>
-                  </div>
-                ))}
+        {/* ─── View Routing ─────────────────────────────────── */}
+        {activeTab === 'chat' && (
+          <main className="chat-main" style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+            <div className="chat-topbar">
+              <div className="chat-topbar-title">
+                {activeSessionId
+                  ? sessions.find(s => s.id === activeSessionId)?.title ?? 'Task Workspace'
+                  : 'Autonomous AI Multi-Agent Platform'}
+              </div>
+              <div className="chat-topbar-actions">
+                {activeSessionId && (
+                  <span className={`badge badge-${sessions.find(s => s.id === activeSessionId)?.status ?? 'pending'}`}>
+                    {sessions.find(s => s.id === activeSessionId)?.status ?? 'pending'}
+                  </span>
+                )}
+                {activeRun && (activeRun.status === 'running' || activeRun.status === 'planning') && (
+                  <button
+                    className="btn-reject"
+                    style={{ padding: '4px 10px', fontSize: '0.74rem' }}
+                    onClick={() => handleCancelRun(activeRun.run_id)}
+                  >
+                    <X size={12} style={{ display: 'inline', marginRight: 4 }} /> Cancel
+                  </button>
+                )}
+                <button
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 6,
+                    padding: '6px 12px', borderRadius: 7,
+                    background: 'rgba(255,255,255,0.05)',
+                    border: '1px solid var(--border-subtle)',
+                    color: 'var(--text-secondary)',
+                    fontSize: '0.78rem', fontWeight: 500, cursor: 'pointer',
+                    fontFamily: 'var(--font-sans)'
+                  }}
+                  onClick={handleNewChat}
+                >
+                  <Plus size={13} /> New
+                </button>
               </div>
             </div>
-          ) : (
-            messages.map(msg => (
-              <MessageBubble
-                key={msg.id}
-                msg={msg}
-                onApprove={handleApprove}
-                onReject={handleReject}
-              />
-            ))
-          )}
-          <div ref={messagesEndRef} />
-        </div>
 
-        {/* Input */}
-        <div className="input-area">
-          <div className="input-wrapper">
-            <textarea
-              ref={inputRef}
-              className="input-box"
-              placeholder="Describe your task… (e.g., 'Write a research paper on AI in healthcare' or 'Build a todo app in React')"
-              value={inputText}
-              onChange={e => setInputText(e.target.value)}
-              onKeyDown={handleKeyDown}
-              rows={1}
-              disabled={isSending}
-            />
-            <button
-              className="input-send-btn"
-              onClick={() => handleSend()}
-              disabled={!inputText.trim() || isSending || !defaultProject}
-            >
-              <Send size={16} />
-            </button>
-          </div>
-          <div className="input-hint">
-            Press Enter to send · Shift+Enter for new line · Agents will complete the full task and deliver downloadable output
-          </div>
-        </div>
-      </main>
+            <div className="messages-area">
+              {showWelcome ? (
+                <div className="welcome-screen">
+                  <div className="welcome-logo">🤖</div>
+                  <h1 className="welcome-title">What can I help you build?</h1>
+                  <p className="welcome-subtitle">
+                    Autonomous multi-agent workspace: research papers, websites, data analysis, and grounded document intelligence.
+                  </p>
+                  <div className="suggestion-grid">
+                    {SUGGESTIONS.map((s, i) => (
+                      <div key={i} className="suggestion-card" onClick={() => handleLaunchTask(s.prompt)}>
+                        <div className="suggestion-emoji">{s.emoji}</div>
+                        <div className="suggestion-title">{s.title}</div>
+                        <div className="suggestion-desc">{s.desc}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                messages.map(msg => (
+                  <MessageBubble
+                    key={msg.id}
+                    msg={msg}
+                    onApprove={handleApprove}
+                    onReject={handleReject}
+                  />
+                ))
+              )}
+              <div ref={messagesEndRef} />
+            </div>
+
+            <div className="input-area">
+              <div className="input-wrapper">
+                <textarea
+                  ref={inputRef}
+                  className="input-box"
+                  placeholder="Ask a question or describe any project… (e.g. 'Explain RAG in simple words' or 'Write a research paper on quantum computing')"
+                  value={inputText}
+                  onChange={e => setInputText(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  rows={1}
+                  disabled={isSending}
+                />
+                <button
+                  className="input-send-btn"
+                  onClick={() => {
+                    if (inputText.trim()) {
+                      const text = inputText;
+                      setInputText('');
+                      handleLaunchTask(text);
+                    }
+                  }}
+                  disabled={!inputText.trim() || isSending || !defaultProject}
+                >
+                  <Send size={16} />
+                </button>
+              </div>
+              <div className="input-hint">
+                Press Enter to send · Shifts into multi-agent DAG for complex tasks or returns direct answer for simple questions
+              </div>
+            </div>
+          </main>
+        )}
+
+        {activeTab === 'research' && (
+          <ResearchWorkspace
+            projectId={defaultProject?.project_id || ''}
+            onLaunchTask={handleLaunchTask}
+            activeRun={activeRun}
+            activeTasks={activeTasks}
+            activeArtifacts={activeArtifacts}
+            isProcessing={isSending}
+            onCancelRun={handleCancelRun}
+          />
+        )}
+
+        {activeTab === 'software' && (
+          <SoftwareWorkspace
+            projectId={defaultProject?.project_id || ''}
+            onLaunchTask={handleLaunchTask}
+            activeRun={activeRun}
+            activeTasks={activeTasks}
+            activeArtifacts={activeArtifacts}
+            isProcessing={isSending}
+            onCancelRun={handleCancelRun}
+          />
+        )}
+
+        {activeTab === 'data' && (
+          <DataAnalysisWorkspace
+            projectId={defaultProject?.project_id || ''}
+            onLaunchTask={handleLaunchTask}
+            activeRun={activeRun}
+            activeTasks={activeTasks}
+            activeArtifacts={activeArtifacts}
+            isProcessing={isSending}
+            onCancelRun={handleCancelRun}
+          />
+        )}
+
+        {activeTab === 'document' && (
+          <DocumentQAWorkspace
+            projectId={defaultProject?.project_id || ''}
+            onLaunchTask={handleLaunchTask}
+            activeRun={activeRun}
+            activeTasks={activeTasks}
+            activeArtifacts={activeArtifacts}
+            isProcessing={isSending}
+            onCancelRun={handleCancelRun}
+          />
+        )}
+
+        {activeTab === 'files' && (
+          <FilesDownloadsWorkspace />
+        )}
+
+        {activeTab === 'timeline' && (
+          <TimelineDAGWorkspace
+            runs={allRuns}
+            activeRun={activeRun}
+            tasks={activeTasks}
+            onSelectRun={(runId) => {
+              const run = allRuns.find(r => r.run_id === runId);
+              if (run) {
+                handleLoadSession({
+                  id: run.run_id,
+                  projectId: run.project_id,
+                  title: run.goal,
+                  status: run.status,
+                  createdAt: run.created_at,
+                });
+              }
+            }}
+            onRefresh={() => {
+              if (activeRun) {
+                handleLoadSession({
+                  id: activeRun.run_id,
+                  projectId: activeRun.project_id,
+                  title: activeRun.goal,
+                  status: activeRun.status,
+                  createdAt: activeRun.created_at,
+                });
+              }
+            }}
+            onCancelRun={handleCancelRun}
+            onViewArtifacts={(taskId) => {
+              setFilterTaskId(taskId);
+              setArtifactsModalOpen(true);
+            }}
+          />
+        )}
+
+        {activeTab === 'settings' && (
+          <SettingsWorkspace
+            models={models}
+            onRefreshModels={loadWorkspaceData}
+          />
+        )}
+      </div>
+
+      {/* Task Artifacts Modal */}
+      <ArtifactsModal
+        isOpen={artifactsModalOpen}
+        onClose={() => setArtifactsModalOpen(false)}
+        artifacts={activeArtifacts}
+        filterTaskId={filterTaskId}
+      />
     </div>
   );
 };

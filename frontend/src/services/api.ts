@@ -93,10 +93,56 @@ export const api = {
     });
   },
 
+  async cancelRun(runId: string): Promise<Run> {
+    return fetchJSON<Run>(`/runs/${runId}/cancel`, {
+      method: 'POST'
+    });
+  },
+
   // Artifacts
   async getArtifacts(runId?: string): Promise<Artifact[]> {
     const q = runId ? `?run_id=${runId}` : '';
     return fetchJSON<Artifact[]>(`/artifacts/${q}`);
+  },
+
+  async getArtifact(artifactId: string): Promise<Artifact> {
+    return fetchJSON<Artifact>(`/artifacts/${artifactId}`);
+  },
+
+  async getArtifactContent(artifactId: string): Promise<string> {
+    const res = await fetch(`${API_BASE}/artifacts/${artifactId}/content`);
+    if (!res.ok) throw new Error(`Failed to fetch artifact content: ${res.status}`);
+    return res.text();
+  },
+
+  getArtifactDownloadUrl(artifactId: string): string {
+    return `${API_BASE}/artifacts/${artifactId}/download`;
+  },
+
+  // Files
+  async uploadFile(file: File, projectId?: string): Promise<{
+    file_id: string;
+    filename: string;
+    file_path: string;
+    file_type: string;
+    size_bytes: number;
+    preview: string;
+    project_id?: string;
+  }> {
+    const formData = new FormData();
+    formData.append('file', file);
+    if (projectId) {
+      formData.append('project_id', projectId);
+    }
+    const res = await fetch(`${API_BASE}/files/upload`, {
+      method: 'POST',
+      body: formData
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Upload error (${res.status}): ${err}`);
+    }
+    return res.json();
   },
 
   // RAG & Project Memory

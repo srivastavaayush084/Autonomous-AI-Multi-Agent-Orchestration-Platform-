@@ -55,3 +55,12 @@ async def resume_run(run_id: str):
     if not run:
         raise HTTPException(status_code=404, detail="Run not found or cannot be resumed")
     return run
+
+
+@router.post("/{run_id}/cancel", response_model=RunResponse)
+async def cancel_run(run_id: str):
+    run = await orchestrator.cancel_run(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return run
+

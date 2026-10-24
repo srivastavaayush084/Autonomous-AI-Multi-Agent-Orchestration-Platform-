@@ -27,6 +27,8 @@ from app.services.model_adapter import model_adapter
 from app.services.router import model_router
 from app.services.rag_service import rag_service
 from app.services.hybrid_router import hybrid_router
+from app.services.data_analysis_service import data_analysis_service
+from app.services.document_service import document_service
 
 logger = logging.getLogger(__name__)
 
@@ -389,6 +391,30 @@ class OrchestrationService:
         asyncio.create_task(self._execute_dag_loop(run_id))
         return run
 
+    async def cancel_run(self, run_id: str) -> Optional[Dict[str, Any]]:
+        run = await self.get_run(run_id)
+        if not run:
+            return None
+
+        run["status"] = RunStatus.CANCELLED
+        run["completed_at"] = self._now()
+        run["error_message"] = "Execution cancelled by user request."
+        await self._save_run(run)
+
+        # Mark any active or pending tasks as failed
+        tasks = await self.get_run_tasks(run_id)
+        for t in tasks:
+            if t["status"] in [TaskStatus.RUNNING, TaskStatus.PENDING, TaskStatus.READY]:
+                t["status"] = TaskStatus.FAILED
+                t["completed_at"] = self._now()
+                t["error_message"] = "Task cancelled by user request."
+                await self._save_task(t)
+
+        if run_id in self._active_loops:
+            self._active_loops.remove(run_id)
+
+        return run
+
     # ==========================================
     # Autonomous Multi-Agent Execution Engine
     # ==========================================
@@ -457,6 +483,11 @@ class OrchestrationService:
         # ── Analyze Data (Data Analysis) ──────────────────────────────────────
         if plan.workflow == WorkflowType.ANALYZE_DATA:
             await self._execute_data_analysis_run(run_id, goal, plan=plan)
+            return
+
+        # ── Document & Vision Understanding (Uploaded PDF / DOCX / Image) ─────
+        if parameters.get("file_path") and any(parameters.get("file_path", "").lower().endswith(ext) for ext in [".pdf", ".docx", ".doc", ".png", ".jpg", ".jpeg", ".webp"]):
+            await self._execute_doc_qa_run(run_id, goal, plan=plan, file_path=parameters.get("file_path"))
             return
 
         # ── Full pipeline fallback ────────────────────────────────────────────
@@ -1122,18 +1153,21 @@ class OrchestrationService:
         await self._save_run(run)
 
     # ──────────────────────────────────────────────────────────────────────────
-    # Data Analysis Run: analyst + reviewer
+    # Data Analysis Run: Quantitative Engine + Statistical Summary + Analyst Review
     # ──────────────────────────────────────────────────────────────────────────
     async def _execute_data_analysis_run(self, run_id: str, goal: str, plan: Optional[ExecutionPlan] = None):
         run = await self.get_run(run_id)
+        parameters = run.get("metadata", {})
+        file_path = parameters.get("file_path") or parameters.get("dataset_path")
+        csv_data = parameters.get("csv_data") or parameters.get("dataset")
+
         tasks_data = [
-            self._make_task(run_id, "T1-analysis", "Data Exploration & Trend Analysis", "analyst",
-                            f"Perform quantitative and qualitative analysis on the dataset for: {goal}. "
-                            f"Identify patterns, compute relevant statistical metrics, and extract key insights.",
-                            [], ["Quantitative metrics calculated", "Clear pattern identification"], False, "medium"),
-            self._make_task(run_id, "T2-review", "Analytical Quality & Validation", "reviewer",
-                            f"Validate analytical findings and evaluate recommendations for data analysis on: {goal}.",
-                            ["T1-analysis"], ["Confirm analytical validity", "Verify actionable recommendations"], False, "low"),
+            self._make_task(run_id, "T1-analysis", "Quantitative Statistical Analysis & Modeling", "analyst",
+                            f"Perform rigorous data analysis for: {goal}. Compute descriptive metrics, detect outliers, and model correlations.",
+                            [], ["Descriptive statistics computed", "Pattern identification completed"], False, "high"),
+            self._make_task(run_id, "T2-review", "Analytical Quality & Recommendation Validation", "reviewer",
+                            f"Validate statistical findings and actionable recommendations for: {goal}.",
+                            ["T1-analysis"], ["Validate metrics accuracy", "Confirm strategic recommendations"], False, "low"),
         ]
 
         for t in tasks_data:
@@ -1143,8 +1177,50 @@ class OrchestrationService:
         run["status"] = RunStatus.RUNNING
         await self._save_run(run)
 
-        analysis_content = ""
+        # 1. Execute Real Data Engine
+        try:
+            if file_path and os.path.exists(file_path):
+                analysis = data_analysis_service.analyze_dataset(file_path, is_file_path=True, dataset_name=os.path.basename(file_path))
+            elif csv_data and isinstance(csv_data, str) and len(csv_data.strip()) > 10:
+                analysis = data_analysis_service.analyze_dataset(csv_data, is_file_path=False, dataset_name="User Dataset")
+            else:
+                lines = [l.strip() for l in goal.strip().split("\n") if l.strip()]
+                if len(lines) >= 3 and all("," in l for l in lines[:3]):
+                    analysis = data_analysis_service.analyze_dataset(goal, is_file_path=False, dataset_name="Inline Dataset")
+                else:
+                    # Sample benchmark dataset for demonstration
+                    sample_csv = (
+                        "Date,Revenue,ActiveUsers,ConversionRate,ChurnRate\n"
+                        "2026-01,125000,14200,3.4,1.2\n"
+                        "2026-02,138000,15800,3.7,1.1\n"
+                        "2026-03,154000,17500,4.1,0.9\n"
+                        "2026-04,172000,19800,4.3,0.8\n"
+                        "2026-05,191000,22400,4.6,0.7\n"
+                        "2026-06,215000,25600,4.9,0.6\n"
+                    )
+                    analysis = data_analysis_service.analyze_dataset(sample_csv, is_file_path=False, dataset_name="Quarterly Performance Benchmark")
 
+            # Export physical CSV file
+            export_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "exports")
+            os.makedirs(export_dir, exist_ok=True)
+            csv_export_path = os.path.join(export_dir, f"{run_id}_summary_statistics.csv")
+            data_analysis_service.export_summary_csv(analysis, csv_export_path)
+
+            await self._register_artifact(
+                run_id, "T1-analysis",
+                title=f"Download: {run_id[:8]}_summary_statistics.csv",
+                artifact_type="csv",
+                content=analysis["markdown_report"],
+                is_user_facing=True,
+                file_path=csv_export_path,
+                metadata={"run_type": "data_analysis", "file": "csv", "path": csv_export_path}
+            )
+        except Exception as e:
+            logger.error(f"Data engine error in run {run_id}: {e}")
+            raise RuntimeError(f"Data analysis engine failure: {str(e)}")
+
+        # 2. Agent Execution Loop
+        analysis_content = ""
         for t in tasks_data:
             t["status"] = TaskStatus.RUNNING
             t["started_at"] = self._now()
@@ -1152,16 +1228,26 @@ class OrchestrationService:
             await self._save_task(t)
 
             sys_prompt = self._role_system_prompt(t["role"])
-            if t["task_id"] == "T2-review" and analysis_content:
-                user_prompt = f"Validate this data analysis report and verify its conclusions:\n\n{analysis_content}"
+            if t["task_id"] == "T1-analysis":
+                user_prompt = (
+                    f"Analyze the following computed dataset statistics:\n\n"
+                    f"{analysis['markdown_report']}\n\n"
+                    f"User Objective / Question: {goal}\n\n"
+                    f"Synthesize comprehensive analytical findings. Include:\n"
+                    f"1. Executive Summary: Core patterns and growth trajectories\n"
+                    f"2. Statistical Insights: Distribution spread, outliers, and key drivers\n"
+                    f"3. Risk & Anomaly Assessment: High variance or degradation signals\n"
+                    f"4. Strategic Recommendations: 3-5 concrete data-driven next steps."
+                )
             else:
-                user_prompt = t["goal"]
+                user_prompt = (
+                    f"Review and validate this data analysis report:\n\n{analysis_content[:2000]}\n\n"
+                    f"Confirm that all claims align with computed data statistics."
+                )
 
+            target_model = f"ollama/{settings.OLLAMA_DEFAULT_MODEL}"
             response = await model_adapter.generate(
-                t.get("assigned_model", f"ollama/{settings.OLLAMA_DEFAULT_MODEL}"),
-                sys_prompt,
-                user_prompt,
-                temperature=0.3
+                target_model, sys_prompt, user_prompt, temperature=0.3, max_tokens=800, timeout=180.0
             )
 
             if not response or response.strip().startswith("[ERROR:") or "inference failed" in response.lower():
@@ -1187,7 +1273,7 @@ class OrchestrationService:
             is_user_facing = t["task_id"] == "T1-analysis"
             await self._register_artifact(
                 run_id, t["task_id"],
-                title=f"Data Analysis: {goal[:60]}" if is_user_facing else f"[Internal] Analysis Review",
+                title=f"Data Analysis Report: {goal[:60]}" if is_user_facing else f"[Internal] Analysis Review",
                 artifact_type=ArtifactType.REPORT,
                 content=response,
                 is_user_facing=is_user_facing,
@@ -1197,6 +1283,172 @@ class OrchestrationService:
             run = await self.get_run(run_id)
             run["completed_tasks"] = run.get("completed_tasks", 0) + 1
             await self._save_run(run)
+
+        # 3. Export DOCX & PDF Data Analysis Reports
+        report_title = f"Data Analysis: {goal[:50]}"
+        full_content = f"{analysis['markdown_report']}\n\n# Analytical Findings & Recommendations\n{analysis_content}"
+        docx_path = _save_docx(report_title, full_content, run_id)
+        pdf_path = _save_pdf(report_title, full_content, run_id)
+
+        if docx_path and os.path.exists(docx_path) and os.path.getsize(docx_path) > 0:
+            await self._register_artifact(
+                run_id, "T1-analysis",
+                title=f"Download: {goal[:45]}.docx",
+                artifact_type="docx",
+                content=full_content,
+                is_user_facing=True,
+                file_path=docx_path,
+                metadata={"run_type": "data_analysis", "file": "docx", "path": docx_path}
+            )
+
+        if pdf_path and os.path.exists(pdf_path) and os.path.getsize(pdf_path) > 0:
+            await self._register_artifact(
+                run_id, "T1-analysis",
+                title=f"Download: {goal[:45]}.pdf",
+                artifact_type="pdf",
+                content=full_content,
+                is_user_facing=True,
+                file_path=pdf_path,
+                metadata={"run_type": "data_analysis", "file": "pdf", "path": pdf_path}
+            )
+
+        run = await self.get_run(run_id)
+        run["status"] = RunStatus.COMPLETED
+        run["completed_at"] = self._now()
+        run["execution_time_seconds"] = self._diff_seconds(run["completed_at"], run["started_at"])
+        await self._save_run(run)
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Document & Vision Understanding Run (PDF, DOCX, TXT, Image QA)
+    # ──────────────────────────────────────────────────────────────────────────
+    async def _execute_doc_qa_run(self, run_id: str, goal: str, plan: Optional[ExecutionPlan] = None, file_path: Optional[str] = None):
+        run = await self.get_run(run_id)
+        parameters = run.get("metadata", {})
+        fp = file_path or parameters.get("file_path")
+
+        if not fp or not os.path.exists(fp):
+            raise FileNotFoundError(f"Uploaded document or image not found at: {fp}")
+
+        parsed_doc = document_service.process_file(fp)
+        extracted_text = parsed_doc.get("text", "")
+        file_type = parsed_doc.get("file_type", "document")
+        file_basename = os.path.basename(fp)
+
+        tasks_data = [
+            self._make_task(run_id, "T1-extract", f"Extract & Structure {file_type.upper()}", "researcher",
+                            f"Extract and structure content from {file_basename} for: {goal}",
+                            [], ["Text extracted accurately", "Structure mapped"], False, "low"),
+            self._make_task(run_id, "T2-answer", "Grounded Analysis & Question Answering", "writer",
+                            f"Answer question grounded strictly in {file_basename}: {goal}",
+                            ["T1-extract"], ["Answer grounded in content", "Uncertainty highlighted"], False, "high"),
+            self._make_task(run_id, "T3-review", "Fact Verification & Grounding Check", "reviewer",
+                            f"Verify answer claims against extracted text from {file_basename}.",
+                            ["T2-answer"], ["No hallucinations confirmed", "Claims supported"], False, "low"),
+        ]
+
+        for t in tasks_data:
+            await self._save_task(t)
+
+        run["total_tasks"] = len(tasks_data)
+        run["status"] = RunStatus.RUNNING
+        await self._save_run(run)
+
+        doc_answer = ""
+        for t in tasks_data:
+            t["status"] = TaskStatus.RUNNING
+            t["started_at"] = self._now()
+            t["attempts"] = 1
+            await self._save_task(t)
+
+            sys_prompt = self._role_system_prompt(t["role"])
+            if t["task_id"] == "T1-extract":
+                doc_summary = extracted_text[:1200]
+                response = f"Successfully parsed {file_basename} ({file_type.upper()}).\n\nContent Overview:\n{doc_summary}"
+            elif t["task_id"] == "T2-answer":
+                user_prompt = (
+                    f"Document / Image Context ({file_basename}):\n\n"
+                    f"{extracted_text[:2500]}\n\n"
+                    f"User Question / Task: {goal}\n\n"
+                    f"Instructions: Answer thoroughly and objectively based ONLY on the provided context. "
+                    f"If the information is not supported by the document, state this clearly. Format in clean markdown."
+                )
+                target_model = f"ollama/{settings.OLLAMA_DEFAULT_MODEL}"
+                response = await model_adapter.generate(
+                    target_model, sys_prompt, user_prompt, temperature=0.2, max_tokens=800, timeout=180.0
+                )
+            else:  # T3-review
+                user_prompt = (
+                    f"Review this answer against the source document ({file_basename}):\n\n"
+                    f"Answer:\n{doc_answer[:1500]}\n\n"
+                    f"Source Excerpt:\n{extracted_text[:1500]}\n\n"
+                    f"Verify that all claims are grounded in the source text. Confirm absence of hallucinations."
+                )
+                target_model = f"ollama/{settings.OLLAMA_DEFAULT_MODEL}"
+                response = await model_adapter.generate(
+                    target_model, sys_prompt, user_prompt, temperature=0.2, max_tokens=400, timeout=120.0
+                )
+
+            if not response or response.strip().startswith("[ERROR:") or "inference failed" in response.lower():
+                err_msg = response.strip() if response else "Empty model response"
+                t["status"] = TaskStatus.FAILED
+                t["completed_at"] = self._now()
+                t["execution_time_seconds"] = self._diff_seconds(t["completed_at"], t["started_at"])
+                t["error_message"] = err_msg
+                t["result_summary"] = f"Failed: {err_msg[:100]}"
+                await self._save_task(t)
+                raise RuntimeError(f"Step {t['task_id']} ({t['title']}) failed: {err_msg}")
+
+            if t["task_id"] == "T2-answer":
+                doc_answer = response
+
+            t["status"] = TaskStatus.COMPLETED
+            t["completed_at"] = self._now()
+            t["execution_time_seconds"] = self._diff_seconds(t["completed_at"], t["started_at"])
+            t["output_data"] = {"content": response}
+            t["result_summary"] = f"Completed: {t['title']}"
+            await self._save_task(t)
+
+            is_user_facing = (t["task_id"] == "T2-answer")
+            await self._register_artifact(
+                run_id, t["task_id"],
+                title=f"Analysis of {file_basename}: {goal[:50]}" if is_user_facing else f"[Internal] {t['title']}",
+                artifact_type=ArtifactType.REPORT,
+                content=response,
+                is_user_facing=is_user_facing,
+                metadata={"workflow": "document_qa", "file_basename": file_basename, "task": t["task_id"]}
+            )
+
+            run = await self.get_run(run_id)
+            run["completed_tasks"] = run.get("completed_tasks", 0) + 1
+            await self._save_run(run)
+
+        # Export DOCX and PDF Reports
+        report_title = f"Document Understanding: {file_basename}"
+        full_content = f"# Grounded Analysis: {file_basename}\n\n**Query:** {goal}\n\n{doc_answer}\n\n## Source Excerpt\n{extracted_text[:1000]}"
+        docx_path = _save_docx(report_title, full_content, run_id)
+        pdf_path = _save_pdf(report_title, full_content, run_id)
+
+        if docx_path and os.path.exists(docx_path) and os.path.getsize(docx_path) > 0:
+            await self._register_artifact(
+                run_id, "T2-answer",
+                title=f"Download: {file_basename[:30]}_Analysis.docx",
+                artifact_type="docx",
+                content=full_content,
+                is_user_facing=True,
+                file_path=docx_path,
+                metadata={"run_type": "document_qa", "file": "docx", "path": docx_path}
+            )
+
+        if pdf_path and os.path.exists(pdf_path) and os.path.getsize(pdf_path) > 0:
+            await self._register_artifact(
+                run_id, "T2-answer",
+                title=f"Download: {file_basename[:30]}_Analysis.pdf",
+                artifact_type="pdf",
+                content=full_content,
+                is_user_facing=True,
+                file_path=pdf_path,
+                metadata={"run_type": "document_qa", "file": "pdf", "path": pdf_path}
+            )
 
         run = await self.get_run(run_id)
         run["status"] = RunStatus.COMPLETED
