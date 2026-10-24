@@ -12,6 +12,7 @@ async def list_approvals(run_id: Optional[str] = Query(None)):
 
 
 @router.post("/{approval_id}/decide", response_model=ApprovalRequest)
+@router.post("/{approval_id}/decision", response_model=ApprovalRequest)
 async def decide_approval(approval_id: str, decision_data: ApprovalDecision):
     updated = await orchestrator.process_approval_decision(
         approval_id=approval_id,

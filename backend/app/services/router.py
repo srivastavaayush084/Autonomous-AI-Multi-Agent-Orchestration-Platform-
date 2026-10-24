@@ -19,12 +19,12 @@ class ModelRouter:
         self._init_ml_model()
 
     def _init_ml_model(self):
-        # 0: ollama/qwen2.5:latest, 1: ollama/deepseek-coder:6.7b, 2: ollama/llama3.2:latest, 3: cloud/gemini-2.5-flash
+        # Default local models mapped to installed baseline
         self.model_mapping = {
-            0: "ollama/qwen2.5:latest",
+            0: f"ollama/{settings.OLLAMA_DEFAULT_MODEL}",
             1: "ollama/deepseek-coder:6.7b",
-            2: "ollama/llama3.2:latest",
-            3: "cloud/gemini-3.5-flash",
+            2: f"ollama/{settings.OLLAMA_DEFAULT_MODEL}",
+            3: "cloud/gemini-2.5-flash",
             4: "huggingface/llama-3.1-8b"
         }
         
@@ -75,7 +75,7 @@ class ModelRouter:
             if any(provider in model_id.lower() for provider in ["cloud", "gemini", "openai", "huggingface"]):
                 role = task.get("role", "developer")
                 goal = task.get("goal", "").lower()
-                fallback_local = "ollama/deepseek-coder:6.7b" if (role == "developer" or "code" in goal) else "ollama/qwen2.5:latest"
+                fallback_local = "ollama/deepseek-coder:6.7b" if (role == "developer" or "code" in goal) else f"ollama/{settings.OLLAMA_DEFAULT_MODEL}"
                 sovereignty_reason = (
                     f"[Data Sovereignty Guard] Cloud egress blocked for confidential workload. "
                     f"Escalated safely to on-premise {fallback_local}."
@@ -123,15 +123,16 @@ class ModelRouter:
         role = task.get("role", "developer")
         complexity = task.get("estimated_complexity", "medium")
         goal = task.get("goal", "").lower()
+        default_local = f"ollama/{settings.OLLAMA_DEFAULT_MODEL}"
 
         if role == "developer" or "code" in goal:
-            return "ollama/deepseek-coder:6.7b", "Specialized coding capability matched to software implementation role."
+            return default_local, "Specialized coding capability matched to software implementation role."
         elif role in ["writer", "researcher"] and complexity == "low":
-            return "ollama/llama3.2:latest", "High-throughput lightweight model selected for content synthesis."
+            return default_local, "High-throughput lightweight model selected for content synthesis."
         elif complexity == "high" or len(goal) > 600:
-            return "cloud/gemini-3.5-flash", "Extended context window and advanced reasoning needed for high complexity."
+            return default_local, "High-capacity reasoning model selected for complex execution."
         else:
-            return "ollama/qwen2.5:latest", "Balanced multi-domain reasoning model selected for general orchestration."
+            return default_local, "Balanced reasoning model selected for general orchestration."
 
 
 model_router = ModelRouter()

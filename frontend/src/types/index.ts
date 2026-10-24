@@ -92,7 +92,9 @@ export interface Artifact {
   artifact_type: string;
   file_path?: string;
   content_snippet?: string;
+  full_content?: string;      // full AI response text
   size_bytes: number;
   created_at: string;
   metadata: Record<string, any>;
 }
+

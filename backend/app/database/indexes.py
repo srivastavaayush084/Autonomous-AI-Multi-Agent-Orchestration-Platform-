@@ -22,7 +22,6 @@ async def create_indexes():
 
         # Tasks indexes: compound unique index per run ensures tasks don't collide across runs
         await db.tasks.create_index([("run_id", 1), ("task_id", 1)], unique=True)
-        await db.tasks.create_index("task_id")
         await db.tasks.create_index("run_id")
         await db.tasks.create_index([("run_id", 1), ("status", 1)])
 

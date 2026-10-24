@@ -24,8 +24,11 @@ class Settings(BaseSettings):
     
     # Inference Providers (Hybrid Mode)
     DEFAULT_MODEL_PROVIDER: str = "ollama"
-    OLLAMA_BASE_URL: str = "http://localhost:11434"
-    OLLAMA_DEFAULT_MODEL: str = "qwen2.5:latest"
+    OLLAMA_BASE_URL: str = "http://127.0.0.1:11434"
+    OLLAMA_DEFAULT_MODEL: str = "llama3.2:1b"
+    PLANNER_MODEL: str = "llama3.2:1b"
+    PLANNER_TIMEOUT_SECONDS: float = 30.0
+    PLANNER_MAX_RETRIES: int = 2
     
     # Cloud API Fallbacks
     GEMINI_API_KEY: str = ""

@@ -82,50 +82,53 @@ class ModelAdapter:
             except Exception as e:
                 logger.warning(f"Hugging Face request failed: {e}")
 
-        # Attempt 1: Ollama
-        if "ollama" in model_id.lower():
-            try:
-                async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=1.5)) as client:
-                    payload = {
-                        "model": clean_model,
-                        "prompt": user_prompt,
-                        "system": system_prompt,
-                        "stream": False,
-                        "options": {"temperature": temperature}
-                    }
-                    res = await client.post(f"{self.ollama_url}/api/generate", json=payload)
-                    if res.status_code == 200:
-                        return res.json().get("response", "")
-            except Exception as e:
-                logger.warning(f"Ollama generation failed for {clean_model}: {e}. Triggering fallback.")
+    async def _resolve_ollama_model(self, requested_model: str) -> str:
+        """
+        Resolves requested model to an installed model in Ollama.
+        If requested model is not installed, falls back to settings.OLLAMA_DEFAULT_MODEL or the first installed model.
+        """
+        clean_model = requested_model.split("/")[-1]
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(4.0, connect=2.0)) as client:
+                res = await client.get(f"{self.ollama_url}/api/tags")
+                if res.status_code == 200:
+                    installed = [m.get("name", "") for m in res.json().get("models", [])]
+                    if not installed:
+                        return clean_model
+                    if clean_model in installed:
+                        return clean_model
+                    clean_base = clean_model.split(":")[0]
+                    for m in installed:
+                        if m.split(":")[0] == clean_base:
+                            return m
+                    if settings.OLLAMA_DEFAULT_MODEL in installed:
+                        logger.info(f"Ollama model '{clean_model}' not installed. Resolved to default '{settings.OLLAMA_DEFAULT_MODEL}'.")
+                        return settings.OLLAMA_DEFAULT_MODEL
+                    logger.info(f"Ollama model '{clean_model}' not installed. Resolved to available '{installed[0]}'.")
+                    return installed[0]
+        except Exception as e:
+            logger.debug(f"Could not query Ollama tags: {e}")
+        return clean_model
 
-        # Attempt 2: Cloud (Gemini) if key present
-        if self.gemini_key:
-            try:
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key={self.gemini_key}"
-                async with httpx.AsyncClient(timeout=30.0) as client:
-                    payload = {
-                        "contents": [
-                            {"role": "user", "parts": [{"text": f"System: {system_prompt}\n\nTask: {user_prompt}"}]}
-                        ],
-                        "generationConfig": {"temperature": temperature}
-                    }
-                    res = await client.post(url, json=payload)
-                    if res.status_code == 200:
-                        candidates = res.json().get("candidates", [])
-                        if candidates:
-                            return candidates[0]["content"]["parts"][0]["text"]
-            except Exception as e:
-                logger.warning(f"Gemini fallback failed: {e}")
+    async def generate(self, model_id: str, system_prompt: str, user_prompt: str, temperature: float = 0.2) -> str:
+        """
+        Executes generation with automatic fallback:
+        1. Targeted model (Ollama or Cloud) with dynamic model resolution
+        2. Fallback provider if targeted provider fails
+        3. Clear, explicit error handling if all providers are unavailable
+        """
+        provider = "ollama" if "ollama" in model_id.lower() else "cloud"
+        clean_model = model_id.split("/")[-1]
 
-        # Attempt 3: Hugging Face Serverless Fallback
-        if self.hf_key:
+        # Attempt 1: Direct Provider - Hugging Face (if targeted or key present)
+        if "huggingface" in model_id.lower() and self.hf_key and not self.hf_key.startswith("hf_placeholder"):
             try:
                 hf_url = "https://router.huggingface.co/v1/chat/completions"
                 headers = {"Authorization": f"Bearer {self.hf_key}"}
+                hf_model = "meta-llama/Llama-3.1-8B-Instruct"
                 async with httpx.AsyncClient(timeout=30.0) as client:
                     payload = {
-                        "model": "meta-llama/Llama-3.1-8B-Instruct",
+                        "model": hf_model,
                         "messages": [
                             {"role": "system", "content": system_prompt},
                             {"role": "user", "content": user_prompt}
@@ -140,109 +143,112 @@ class ModelAdapter:
                         if choices:
                             return choices[0]["message"]["content"]
             except Exception as e:
-                logger.warning(f"Hugging Face fallback failed: {e}")
+                logger.warning(f"Hugging Face request failed: {e}")
 
-        # Attempt 4: High-fidelity deterministic synthesis engine
-        logger.info(f"Using deterministic synthesis engine for model {model_id}")
-        return self._generate_synthetic_response(system_prompt, user_prompt)
+        # Attempt 2: Direct Provider - Cloud (Gemini) if targeted
+        if ("cloud" in model_id.lower() or "gemini" in model_id.lower()) and self.gemini_key and not self.gemini_key.startswith("AQ."):
+            try:
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={self.gemini_key}"
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    payload = {
+                        "contents": [
+                            {"role": "user", "parts": [{"text": f"System: {system_prompt}\n\nTask: {user_prompt}"}]}
+                        ],
+                        "generationConfig": {"temperature": temperature}
+                    }
+                    res = await client.post(url, json=payload)
+                    if res.status_code == 200:
+                        candidates = res.json().get("candidates", [])
+                        if candidates:
+                            return candidates[0]["content"]["parts"][0]["text"]
+            except Exception as e:
+                logger.warning(f"Gemini generation failed: {e}")
+
+        # Attempt 3: Local Ollama (targeted, or as fallback from failed cloud/offline model)
+        try:
+            target_model = await self._resolve_ollama_model(clean_model)
+            async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=5.0)) as client:
+                payload = {
+                    "model": target_model,
+                    "prompt": user_prompt,
+                    "system": system_prompt,
+                    "stream": False,
+                    "options": {"temperature": temperature}
+                }
+                res = await client.post(f"{self.ollama_url}/api/generate", json=payload)
+                if res.status_code == 200:
+                    content = res.json().get("response", "").strip()
+                    if content:
+                        return content
+                else:
+                    logger.warning(f"Ollama returned status {res.status_code} for {target_model}: {res.text[:150]}")
+        except Exception as e:
+            logger.warning(f"Ollama generation failed for {clean_model}: {e}")
+
+        # All providers failed: return explicit error indicator (never false canned success)
+        err_msg = f"[ERROR: Model inference failed for '{model_id}': local Ollama and cloud providers unavailable or timed out.]"
+        logger.error(err_msg)
+        return err_msg
+
+    async def chat_structured(
+        self,
+        model_id: str,
+        system_prompt: str,
+        user_prompt: str,
+        json_schema: Optional[Dict[str, Any]] = None,
+        timeout: Optional[float] = None
+    ) -> Dict[str, Any]:
+        """
+        Sends structured chat request using Ollama's /api/chat endpoint with JSON Schema constraints.
+        Returns parsed dict. Raises ValueError or httpx exceptions on failure.
+        """
+        clean_model = model_id.split("/")[-1]
+        timeout_sec = timeout or settings.PLANNER_TIMEOUT_SECONDS
+
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(timeout_sec, connect=3.0)) as client:
+                payload: Dict[str, Any] = {
+                    "model": clean_model,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt}
+                    ],
+                    "stream": False,
+                    "options": {"temperature": 0.0}
+                }
+                if json_schema:
+                    payload["format"] = json_schema
+                else:
+                    payload["format"] = "json"
+
+                res = await client.post(f"{self.ollama_url}/api/chat", json=payload)
+                if res.status_code == 200:
+                    data = res.json()
+                    msg = data.get("message", {}).get("content", "")
+                    clean_content = msg.strip()
+                    if "```" in clean_content:
+                        parts = clean_content.split("```")
+                        for part in parts:
+                            cand = part.strip()
+                            if cand.startswith("json"):
+                                cand = cand[4:].strip()
+                            if cand.startswith("{") and cand.endswith("}"):
+                                clean_content = cand
+                                break
+                    return json.loads(clean_content)
+                else:
+                    logger.warning(f"Ollama chat_structured returned status {res.status_code}: {res.text[:150]}")
+                    raise RuntimeError(f"Ollama returned status {res.status_code}: {res.text[:150]}")
+        except Exception as e:
+            logger.warning(f"Ollama chat_structured failed for {clean_model}: {e}")
+            raise
 
     def _generate_synthetic_response(self, system_prompt: str, user_prompt: str) -> str:
-        prompt_lower = user_prompt.lower()
-        sys_lower = system_prompt.lower()
-
-        if "planner" in sys_lower or "decompose" in prompt_lower or "subtasks" in sys_lower:
-            return json.dumps({
-                "goal": user_prompt[:150],
-                "reasoning": "Goal systematically decomposed into modular research, architecture, implementation, and quality assurance phases.",
-                "tasks": [
-                    {
-                        "task_id": "T1-research",
-                        "title": "Analyze Architecture Requirements & Evidence",
-                        "role": "researcher",
-                        "goal": f"Conduct in-depth technical analysis for: {user_prompt[:100]}",
-                        "depends_on": [],
-                        "acceptance_criteria": ["Document functional constraints", "Identify integration dependencies"],
-                        "requires_approval": False,
-                        "estimated_complexity": "medium"
-                    },
-                    {
-                        "task_id": "T2-dev-core",
-                        "title": "Build Core Engine & Services",
-                        "role": "developer",
-                        "goal": "Develop production-ready modules, state models, and handlers",
-                        "depends_on": ["T1-research"],
-                        "acceptance_criteria": ["All schemas validated", "Error handling implemented"],
-                        "requires_approval": False,
-                        "estimated_complexity": "high"
-                    },
-                    {
-                        "task_id": "T3-deployment-prep",
-                        "title": "Configure Production Infrastructure & Security Gates",
-                        "role": "developer",
-                        "goal": "Prepare deployment configuration and security sandboxes",
-                        "depends_on": ["T2-dev-core"],
-                        "acceptance_criteria": ["Environment parameters validated", "Approval checkpoints confirmed"],
-                        "requires_approval": True,
-                        "estimated_complexity": "medium"
-                    },
-                    {
-                        "task_id": "T4-qa-verification",
-                        "title": "End-to-End Verification & Quality Audit",
-                        "role": "reviewer",
-                        "goal": "Verify system against acceptance criteria and evaluate output integrity",
-                        "depends_on": ["T3-deployment-prep"],
-                        "acceptance_criteria": ["100% criteria compliance", "Zero critical security risks"],
-                        "requires_approval": False,
-                        "estimated_complexity": "low"
-                    }
-                ]
-            }, indent=2)
-
-        elif "research" in sys_lower:
-            return json.dumps({
-                "summary": f"Comprehensive research and technical assessment completed for: {user_prompt[:80]}.",
-                "evidence": [
-                    "Empirical verification of modular multi-agent orchestration architecture.",
-                    "Stateful task graph with persistent MongoDB checkpoints ensures zero state loss on interruption.",
-                    "Hybrid model routing balances local privacy and cost efficiency with cloud scalability."
-                ],
-                "findings": [
-                    {"topic": "Scalability & Resilience", "detail": "Asynchronous DAG execution permits high throughput and graceful task retries.", "confidence": 0.98},
-                    {"topic": "Safety Guardrails", "detail": "Human-in-the-loop checkpoints securely quarantine consequential destructive actions.", "confidence": 0.96}
-                ],
-                "unresolved_gaps": []
-            }, indent=2)
-
-        elif "developer" in sys_lower:
-            return json.dumps({
-                "summary": "Engineered robust module implementation matching technical specification.",
-                "files": [
-                    {
-                        "path": "src/core/engine.ts",
-                        "action": "create",
-                        "content": "// Production-grade orchestrated task module\nexport const execute = () => ({ status: 'success' });"
-                    }
-                ],
-                "tests": [
-                    {"name": "test_core_execution", "command": "pytest backend/tests -v", "expected_outcome": "passed"}
-                ],
-                "notes": "Code generated with comprehensive type safety, input validation, and zero unhandled rejections."
-            }, indent=2)
-
-        elif "reviewer" in sys_lower or "qa" in sys_lower:
-            return json.dumps({
-                "passed": True,
-                "score": 0.98,
-                "criteria_results": [
-                    {"criterion": "Strict schema adherence", "status": "PASSED", "remarks": "Pydantic validated with no anomalies."},
-                    {"criterion": "Safety and security compliance", "status": "PASSED", "remarks": "No destructive unapproved operations detected."}
-                ],
-                "security_assessment": "CLEAN",
-                "recommended_action": "APPROVE",
-                "feedback": "Deliverables meet all rigorous acceptance criteria and benchmark standards."
-            }, indent=2)
-
-        return f"Successfully processed task: {user_prompt[:100]} with high confidence."
+        """
+        Deprecated. Canned placeholder fallbacks have been eliminated.
+        Explicit errors are raised instead to prevent false success.
+        """
+        raise RuntimeError("Synthetic placeholder content has been disabled. Genuine model response required.")
 
 
 model_adapter = ModelAdapter()
