@@ -127,9 +127,13 @@ const OutputCard: React.FC<OutputCardProps> = ({ artifacts }) => {
   const [activeTab, setActiveTab] = useState(0);
   const [copied, setCopied] = useState(false);
 
-  if (!artifacts.length) return null;
+  // Filter out internal scratch artifacts so user only sees real deliverables
+  const userArtifacts = artifacts.filter(a => !a.title.startsWith('[Internal]'));
+  const effectiveArtifacts = userArtifacts.length > 0 ? userArtifacts : artifacts;
 
-  const current = artifacts[activeTab] || artifacts[0];
+  if (!effectiveArtifacts.length) return null;
+
+  const current = effectiveArtifacts[activeTab] || effectiveArtifacts[0];
   const content = (current as any).full_content || current.content_snippet || '';
   const contentType = detectContentType(content);
   const displayContent = contentType === 'code' ? stripCodeFences(content) : content;
@@ -151,10 +155,10 @@ const OutputCard: React.FC<OutputCardProps> = ({ artifacts }) => {
     URL.revokeObjectURL(url);
   };
 
-  const pdfArtifact = artifacts.find(a => a.artifact_type === 'pdf' || a.title.toLowerCase().endsWith('.pdf'));
-  const docxArtifact = artifacts.find(a => a.artifact_type === 'docx' || a.title.toLowerCase().endsWith('.docx'));
-  const zipArtifact = artifacts.find(a => a.artifact_type === 'zip' || a.title.toLowerCase().includes('zip'));
-  const csvArtifact = artifacts.find(a => a.artifact_type === 'csv' || a.title.toLowerCase().endsWith('.csv'));
+  const pdfArtifact = effectiveArtifacts.find(a => a.artifact_type === 'pdf' || a.title.toLowerCase().endsWith('.pdf'));
+  const docxArtifact = effectiveArtifacts.find(a => a.artifact_type === 'docx' || a.title.toLowerCase().endsWith('.docx'));
+  const zipArtifact = effectiveArtifacts.find(a => a.artifact_type === 'zip' || a.title.toLowerCase().includes('zip'));
+  const csvArtifact = effectiveArtifacts.find(a => a.artifact_type === 'csv' || a.title.toLowerCase().endsWith('.csv'));
 
   const downloadPDF = () => {
     if (pdfArtifact) {
@@ -218,7 +222,7 @@ const OutputCard: React.FC<OutputCardProps> = ({ artifacts }) => {
       <div className="output-card-header">
         <div className="output-card-title">
           <CheckCircle size={15} />
-          Deliverables Ready — {artifacts.length} artifact{artifacts.length > 1 ? 's' : ''}
+          Deliverables Ready — {effectiveArtifacts.length} deliverable{effectiveArtifacts.length > 1 ? 's' : ''}
         </div>
         <div className="output-card-actions">
           <button className="btn-copy" onClick={handleCopy}>
@@ -252,9 +256,9 @@ const OutputCard: React.FC<OutputCardProps> = ({ artifacts }) => {
         </div>
       </div>
 
-      {artifacts.length > 1 && (
+      {effectiveArtifacts.length > 1 && (
         <div className="output-tab-bar">
-          {artifacts.map((a, i) => (
+          {effectiveArtifacts.map((a, i) => (
             <button
               key={a.artifact_id}
               className={`output-tab ${i === activeTab ? 'active' : ''}`}
@@ -344,7 +348,7 @@ const MessageBubble: React.FC<{
                 <AgentProgress tasks={msg.tasks} />
               )}
 
-              {msg.isComplete && msg.artifacts && msg.artifacts.length > 0 && (
+              {msg.isComplete && !msg.content.startsWith('❌') && msg.artifacts && msg.artifacts.some(a => !a.title.startsWith('[Internal]')) && (
                 <OutputCard artifacts={msg.artifacts} />
               )}
             </>
